@@ -67,6 +67,13 @@
 
   .marker-num{background:var(--teal);color:#fff;border:2px solid #fff;border-radius:50%;width:26px;height:26px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;box-shadow:0 2px 6px rgba(0,0,0,.3)}
   .marker-num.done{background:var(--done)}
+  .marker-num.approx{background:var(--danger);animation:pulse 1.4s ease-in-out infinite}
+  @keyframes pulse{0%,100%{box-shadow:0 2px 6px rgba(0,0,0,.3)}50%{box-shadow:0 2px 6px rgba(0,0,0,.3),0 0 0 6px rgba(239,68,68,.25)}}
+
+  /* badge "perlu set pin" di list */
+  .badge{display:inline-block;font-size:10.5px;font-weight:700;color:#fff;background:var(--danger);padding:1px 7px;border-radius:8px;margin-left:6px;vertical-align:1px}
+  .stop.approx .name{color:var(--danger)}
+  .act .j-pin svg{stroke:var(--danger)}
   .me-dot{width:18px;height:18px;background:#2563eb;border:3px solid #fff;border-radius:50%;box-shadow:0 0 0 2px rgba(37,99,235,.4),0 2px 6px rgba(0,0,0,.3)}
   .spin{display:inline-block;width:15px;height:15px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px;margin-right:6px}
   @keyframes s{to{transform:rotate(360deg)}}
@@ -159,13 +166,59 @@
     follow=true; this.classList.add('on'); map.setView([me.lat,me.lng],17);
   });
 
-  // ---------- geocode (Nominatim) ----------
-  function geocode(q){
-    var url='https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=id&q='+encodeURIComponent(q);
-    if(me){ // bias ke sekitar posisi sekarang
-      var d=0.3; url+='&viewbox='+(me.lng-d)+','+(me.lat+d)+','+(me.lng+d)+','+(me.lat-d);
+  // ---------- geocode (Nominatim) dgn normalisasi + fallback berjenjang ----------
+  // Alamat desa RI sering gagal kalau dikirim mentah. Kita normalisasi singkatan,
+  // buang noise (RT/RW, kode pos, patokan "10 M dari ..."), lalu coba dari paling
+  // spesifik mundur ke kecamatan/kabupaten. Hasil non-pertama = "perkiraan".
+  function buildQueries(raw){
+    var s=' '+raw+' ';
+    s=s.replace(/\bKec\.?\b\.?/gi,'Kecamatan')
+       .replace(/\bKab\.?\b\.?/gi,'Kabupaten')
+       .replace(/\bKel\.?\b\.?/gi,'Kelurahan')
+       .replace(/\bJl\.?\b\.?/gi,'Jalan')
+       .replace(/\bNo\.?\s*\d+\w*/gi,'')        // No.13
+       .replace(/\bRT\.?\s*\d+/gi,'')           // RT.01
+       .replace(/\bRW\.?\s*\d+/gi,'')           // RW.01
+       .replace(/\b\d{5}\b/g,'')                // kode pos
+       .replace(/\b\d+\s?M\b[^,]*/gi,'')        // "10 M Dari Lampu Merah..."
+       .replace(/\bArah\b[^,]*/gi,'')           // "Arah ciawigebang"
+       .replace(/\bBarat Jalan\b|\bTimur Jalan\b|\bdepan\b/gi,'');
+    var parts=s.split(',').map(function(p){return p.replace(/\s+/g,' ').trim();})
+               .filter(function(p){return p.length>1;});
+    // buang duplikat berurutan
+    parts=parts.filter(function(p,i){return i===0||p.toLowerCase()!==parts[i-1].toLowerCase();});
+    var qs=[];
+    for(var i=0;i<parts.length;i++){
+      var slice=parts.slice(i);
+      if(slice.length) qs.push(slice.join(', ')+', Indonesia');
+      if(qs.length>=4) break; // cukup 4 percobaan
     }
-    return fetch(url,{headers:{'Accept':'application/json'}}).then(function(r){return r.json();});
+    if(!qs.length) qs.push(raw+', Indonesia');
+    return qs;
+  }
+
+  function geocodeOne(q){
+    var url='https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=id&q='+encodeURIComponent(q);
+    if(me){ var d=0.4; url+='&viewbox='+(me.lng-d)+','+(me.lat+d)+','+(me.lng+d)+','+(me.lat-d); }
+    return fetch(url,{headers:{'Accept':'application/json'}})
+      .then(function(r){return r.json();})
+      .then(function(a){return (a&&a.length)?a[0]:null;})
+      .catch(function(){return null;});
+  }
+
+  // coba query berurutan; resolve {r, approx} atau null kalau semua gagal
+  function geocode(raw){
+    var qs=buildQueries(raw);
+    var i=0;
+    function next(){
+      if(i>=qs.length) return Promise.resolve(null);
+      var isFirst=(i===0); var idx=i; i++;
+      return geocodeOne(qs[idx]).then(function(r){
+        if(r) return {r:r, approx:!isFirst, matched:qs[idx]};
+        return next();
+      });
+    }
+    return next();
   }
 
   var addBtn=document.getElementById('add'), qInput=document.getElementById('q');
@@ -173,13 +226,28 @@
     var q=qInput.value.trim();
     if(!q) return;
     addBtn.disabled=true; addBtn.textContent='…';
-    geocode(q).then(function(res){
-      if(!res||!res.length){ toast('Alamat nggak ketemu. Coba lebih lengkap (+kota).'); return; }
-      var r=res[0], full=r.display_name||q;
-      stops.push({id:Date.now(), name:q, sub:full, lat:+r.lat, lng:+r.lon, done:false});
-      save(); render(); qInput.value='';
-      map.setView([+r.lat,+r.lon],16); follow=false; document.getElementById('locate').classList.remove('on');
-      toast('Titik ditambah ✓');
+    geocode(q).then(function(hit){
+      var stop;
+      if(hit){
+        // ketemu — kalau approx (cuma level kecamatan/kabupaten), tandai biar digeser
+        stop={id:Date.now(), name:q, sub:(hit.r.display_name||q),
+              lat:+hit.r.lat, lng:+hit.r.lon, done:false, approx:hit.approx};
+        stops.push(stop); save(); render(); qInput.value='';
+        map.setView([stop.lat,stop.lng], hit.approx?14:16);
+        follow=false; document.getElementById('locate').classList.remove('on');
+        toast(hit.approx ? 'Titik perkiraan dipasang — geser pin ke lokasi pas 📍'
+                         : 'Titik ditambah ✓');
+      }else{
+        // geocode total gagal — JANGAN tolak. Taruh di posisi GPS / tengah peta,
+        // tandai "perlu set pin" supaya kurir geser sendiri.
+        var c = me ? {lat:me.lat,lng:me.lng} : map.getCenter();
+        stop={id:Date.now(), name:q, sub:'⚠ Belum ada titik — geser pin ke lokasi',
+              lat:c.lat, lng:c.lng, done:false, approx:true};
+        stops.push(stop); save(); render(); qInput.value='';
+        map.setView([stop.lat,stop.lng], 15);
+        follow=false; document.getElementById('locate').classList.remove('on');
+        toast('Alamat nggak ketemu otomatis — geser pin merah ke lokasi 📍');
+      }
     }).catch(function(){ toast('Gagal nyari alamat, cek koneksi.'); })
     .finally(function(){ addBtn.disabled=false; addBtn.textContent='Tambah'; });
   }
@@ -199,19 +267,24 @@
       stops.forEach(function(s){
         var displayNo = orderNo(s);
         var el=document.createElement('div');
-        el.className='stop'+(s.done?' done':'');
+        el.className='stop'+(s.done?' done':'')+((s.approx&&!s.done)?' approx':'');
         el.innerHTML=
           '<div class="num">'+displayNo+'</div>'+
           '<div class="stop-txt"><div class="name"></div><div class="sub"></div></div>'+
           '<div class="act">'+
+            ((s.approx&&!s.done)?'<button class="j-pin" title="Set lokasi"><svg viewBox="0 0 24 24" stroke-width="2" fill="none"><path d="M12 21s7-5.6 7-11a7 7 0 10-14 0c0 5.4 7 11 7 11z"/><circle cx="12" cy="10" r="2.5"/></svg></button>':'')+
             '<button class="j-done"><svg class="chk" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></button>'+
             '<button class="j-del"><svg class="del" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg></button>'+
           '</div>';
-        el.querySelector('.name').textContent=s.name;
+        var nameEl=el.querySelector('.name');
+        nameEl.textContent=s.name;
+        if(s.approx&&!s.done){ var b=document.createElement('span'); b.className='badge'; b.textContent='SET PIN'; nameEl.appendChild(b); }
         el.querySelector('.sub').textContent=s.sub;
         el.querySelector('.j-done').addEventListener('click',function(){ s.done=!s.done; save(); render(); });
         el.querySelector('.j-del').addEventListener('click',function(){ stops=stops.filter(function(x){return x.id!==s.id;}); save(); render(); });
-        el.querySelector('.stop-txt').addEventListener('click',function(){ map.setView([s.lat,s.lng],17); follow=false; document.getElementById('locate').classList.remove('on'); });
+        el.querySelector('.stop-txt').addEventListener('click',function(){ focusStop(s); });
+        var pinBtn=el.querySelector('.j-pin');
+        if(pinBtn) pinBtn.addEventListener('click',function(){ focusStop(s); toast('Geser pin merah ke lokasi pas 📍'); });
         list.appendChild(el);
       });
     }
@@ -226,12 +299,31 @@
     return stops.filter(function(x){return !x.done;}).indexOf(s)+1 || '✓';
   }
 
+  function focusStop(s){
+    map.setView([s.lat,s.lng], s.approx?16:17);
+    follow=false; document.getElementById('locate').classList.remove('on');
+    var m=markerById[s.id]; if(m) m.openPopup();
+  }
+
+  var markerById={};
   function drawMarkers(){
-    markers.forEach(function(m){map.removeLayer(m)}); markers=[];
+    markers.forEach(function(m){map.removeLayer(m)}); markers=[]; markerById={};
     stops.forEach(function(s){
-      var m=L.marker([s.lat,s.lng],{icon:L.divIcon({className:'',html:'<div class="marker-num'+(s.done?' done':'')+'">'+orderNo(s)+'</div>',iconSize:[26,26],iconAnchor:[13,13]})}).addTo(map);
-      m.bindPopup('<b>'+s.name+'</b><br><small>'+s.sub+'</small>');
-      markers.push(m);
+      var cls='marker-num'+(s.done?' done':((s.approx)?' approx':''));
+      var m=L.marker([s.lat,s.lng],{
+        draggable:!s.done,
+        icon:L.divIcon({className:'',html:'<div class="'+cls+'">'+orderNo(s)+'</div>',iconSize:[26,26],iconAnchor:[13,13]})
+      }).addTo(map);
+      m.bindPopup('<b>'+s.name+'</b><br><small>'+(s.approx?'📍 Geser pin ini ke lokasi pas':s.sub)+'</small>');
+      m.on('dragend',function(){
+        var ll=m.getLatLng();
+        s.lat=ll.lat; s.lng=ll.lng;
+        if(s.approx){ s.approx=false; s.sub='📍 Lokasi diset manual'; }
+        routeOrder=null; // posisi berubah → rute lama nggak valid lagi
+        save(); render();
+        toast('Lokasi titik diperbarui ✓');
+      });
+      markers.push(m); markerById[s.id]=m;
     });
   }
 
