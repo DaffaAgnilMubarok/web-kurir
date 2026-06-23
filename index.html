@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>Rute Kurir</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  :root{
+    --teal:#0d9488; --teal-dark:#0f766e; --ink:#1e293b; --muted:#64748b;
+    --line:#e2e8f0; --bg:#f8fafc; --done:#94a3b8; --danger:#ef4444;
+    --shadow:0 -8px 30px rgba(15,23,42,.12);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:var(--ink)}
+  #map{position:fixed;inset:0;bottom:0}
+
+  /* search bar */
+  .topbar{position:fixed;top:0;left:0;right:0;z-index:1000;padding:max(10px,env(safe-area-inset-top)) 10px 10px;display:flex;gap:8px}
+  .search{flex:1;display:flex;background:#fff;border-radius:14px;box-shadow:0 4px 18px rgba(15,23,42,.15);overflow:hidden}
+  .search input{flex:1;border:0;outline:0;padding:14px 14px;font-size:16px;background:transparent}
+  .search button{border:0;background:var(--teal);color:#fff;padding:0 18px;font-size:15px;font-weight:600}
+  .search button:active{background:var(--teal-dark)}
+
+  /* floating locate btn */
+  .locate{position:fixed;right:14px;z-index:1000;width:50px;height:50px;border-radius:50%;background:#fff;border:0;box-shadow:0 4px 16px rgba(15,23,42,.22);display:flex;align-items:center;justify-content:center;transition:bottom .25s}
+  .locate svg{width:24px;height:24px;stroke:var(--teal);fill:none;stroke-width:2}
+  .locate.on svg{stroke:#fff} .locate.on{background:var(--teal)}
+
+  /* bottom sheet */
+  .sheet{position:fixed;left:0;right:0;bottom:0;z-index:1000;background:#fff;border-radius:22px 22px 0 0;box-shadow:var(--shadow);transition:transform .28s cubic-bezier(.4,0,.2,1);padding-bottom:env(safe-area-inset-bottom)}
+  .grip{display:flex;justify-content:center;padding:10px 0 6px}
+  .grip span{width:42px;height:5px;border-radius:3px;background:var(--line)}
+  .sheet-head{display:flex;align-items:center;justify-content:space-between;padding:0 18px 8px}
+  .sheet-head h1{font-size:16px;margin:0;font-weight:700}
+  .count{font-size:13px;color:var(--muted);font-weight:500}
+  .list{max-height:46vh;overflow-y:auto;padding:2px 12px 6px;-webkit-overflow-scrolling:touch}
+  .empty{padding:24px 18px 30px;text-align:center;color:var(--muted);font-size:14px;line-height:1.5}
+
+  .stop{display:flex;align-items:center;gap:12px;padding:11px 8px;border-radius:12px}
+  .stop:active{background:var(--bg)}
+  .num{flex-shrink:0;width:28px;height:28px;border-radius:50%;background:var(--teal);color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center}
+  .stop.done .num{background:var(--done)}
+  .stop-txt{flex:1;min-width:0}
+  .stop-txt .name{font-size:14.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .stop-txt .sub{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .stop.done .name{text-decoration:line-through;color:var(--done)}
+  .stop.done .sub{color:#cbd5e1}
+  .act{flex-shrink:0;display:flex;gap:4px}
+  .act button{border:0;background:transparent;padding:8px;border-radius:9px}
+  .act button:active{background:var(--line)}
+  .act svg{width:20px;height:20px;stroke-width:2;fill:none}
+  .chk{stroke:var(--teal)} .stop.done .chk{stroke:var(--teal);fill:var(--teal)}
+  .del{stroke:var(--danger)}
+
+  .footer{padding:10px 16px calc(14px + env(safe-area-inset-bottom));border-top:1px solid var(--line)}
+  .summary{display:flex;justify-content:space-around;margin-bottom:10px;text-align:center}
+  .summary div b{display:block;font-size:18px;font-weight:700}
+  .summary div span{font-size:11px;color:var(--muted)}
+  .route-btn{width:100%;border:0;background:var(--teal);color:#fff;font-size:16px;font-weight:700;padding:15px;border-radius:14px}
+  .route-btn:active{background:var(--teal-dark)}
+  .route-btn:disabled{background:#cbd5e1}
+
+  .toast{position:fixed;left:50%;top:78px;transform:translateX(-50%);z-index:2000;background:var(--ink);color:#fff;padding:11px 18px;border-radius:12px;font-size:14px;box-shadow:0 6px 20px rgba(0,0,0,.25);opacity:0;transition:opacity .25s;pointer-events:none;max-width:88vw;text-align:center}
+  .toast.show{opacity:1}
+
+  .marker-num{background:var(--teal);color:#fff;border:2px solid #fff;border-radius:50%;width:26px;height:26px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;box-shadow:0 2px 6px rgba(0,0,0,.3)}
+  .marker-num.done{background:var(--done)}
+  .me-dot{width:18px;height:18px;background:#2563eb;border:3px solid #fff;border-radius:50%;box-shadow:0 0 0 2px rgba(37,99,235,.4),0 2px 6px rgba(0,0,0,.3)}
+  .spin{display:inline-block;width:15px;height:15px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px;margin-right:6px}
+  @keyframes s{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div class="topbar">
+  <div class="search">
+    <input id="q" type="text" placeholder="Ketik alamat / nama tempat antaran" autocomplete="off" enterkeyhint="search" />
+    <button id="add">Tambah</button>
+  </div>
+</div>
+
+<button class="locate" id="locate" title="Posisi saya">
+  <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+</button>
+
+<div class="sheet" id="sheet">
+  <div class="grip" id="grip"><span></span></div>
+  <div class="sheet-head">
+    <h1>Antaran hari ini</h1>
+    <div class="count" id="count">0 titik</div>
+  </div>
+  <div class="list" id="list">
+    <div class="empty" id="empty">Belum ada titik antaran.<br>Ketik alamat di atas buat nambah.</div>
+  </div>
+  <div class="footer">
+    <div class="summary" id="summary" style="display:none">
+      <div><b id="sumDist">–</b><span>jarak total</span></div>
+      <div><b id="sumTime">–</b><span>estimasi waktu</span></div>
+      <div><b id="sumStops">0</b><span>titik tersisa</span></div>
+    </div>
+    <button class="route-btn" id="route" disabled>Buat rute efisien</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+  "use strict";
+
+  // ---------- storage (aman walau diblokir) ----------
+  var KEY="kurir_stops_v1";
+  function save(){ try{ localStorage.setItem(KEY, JSON.stringify(stops)); }catch(e){} }
+  function load(){ try{ var d=localStorage.getItem(KEY); return d?JSON.parse(d):[]; }catch(e){ return []; } }
+
+  // ---------- state ----------
+  var stops = load();          // {id,name,sub,lat,lng,done}
+  var me = null;               // {lat,lng,acc}
+  var follow = true;
+  var routeLayer = null, routeOrder = null;
+
+  // ---------- map ----------
+  var map = L.map('map',{zoomControl:false,attributionControl:false}).setView([-2.5,118],5);
+  L.control.zoom({position:'topright'}).addTo(map);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,crossOrigin:true}).addTo(map);
+  map.on('dragstart',function(){ if(follow){ follow=false; document.getElementById('locate').classList.remove('on'); }});
+
+  var meMarker=null, accCircle=null, markers=[];
+
+  // ---------- toast ----------
+  var toastEl=document.getElementById('toast'), toastT;
+  function toast(msg){ toastEl.innerHTML=msg; toastEl.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(function(){toastEl.classList.remove('show');},2600); }
+
+  // ---------- GPS ----------
+  function startGPS(){
+    if(!navigator.geolocation){ toast('HP nggak dukung GPS'); return; }
+    navigator.geolocation.watchPosition(function(p){
+      me={lat:p.coords.latitude,lng:p.coords.longitude,acc:p.coords.accuracy};
+      drawMe();
+      if(follow) map.setView([me.lat,me.lng], Math.max(map.getZoom(),16));
+    },function(err){
+      toast(err.code===1?'Izin lokasi ditolak. Aktifkan biar GPS jalan.':'GPS lagi nyari sinyal…');
+    },{enableHighAccuracy:true,maximumAge:3000,timeout:20000});
+  }
+  function drawMe(){
+    if(!me) return;
+    var ll=[me.lat,me.lng];
+    if(!meMarker){
+      meMarker=L.marker(ll,{icon:L.divIcon({className:'',html:'<div class="me-dot"></div>',iconSize:[18,18],iconAnchor:[9,9]}),zIndexOffset:1000}).addTo(map);
+      accCircle=L.circle(ll,{radius:me.acc,color:'#2563eb',weight:1,fillColor:'#2563eb',fillOpacity:.08}).addTo(map);
+    }else{ meMarker.setLatLng(ll); accCircle.setLatLng(ll).setRadius(me.acc); }
+  }
+
+  document.getElementById('locate').addEventListener('click',function(){
+    if(!me){ toast('Lokasi belum ketemu, tunggu sebentar…'); return; }
+    follow=true; this.classList.add('on'); map.setView([me.lat,me.lng],17);
+  });
+
+  // ---------- geocode (Nominatim) ----------
+  function geocode(q){
+    var url='https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=id&q='+encodeURIComponent(q);
+    if(me){ // bias ke sekitar posisi sekarang
+      var d=0.3; url+='&viewbox='+(me.lng-d)+','+(me.lat+d)+','+(me.lng+d)+','+(me.lat-d);
+    }
+    return fetch(url,{headers:{'Accept':'application/json'}}).then(function(r){return r.json();});
+  }
+
+  var addBtn=document.getElementById('add'), qInput=document.getElementById('q');
+  function addStop(){
+    var q=qInput.value.trim();
+    if(!q) return;
+    addBtn.disabled=true; addBtn.textContent='…';
+    geocode(q).then(function(res){
+      if(!res||!res.length){ toast('Alamat nggak ketemu. Coba lebih lengkap (+kota).'); return; }
+      var r=res[0], full=r.display_name||q;
+      stops.push({id:Date.now(), name:q, sub:full, lat:+r.lat, lng:+r.lon, done:false});
+      save(); render(); qInput.value='';
+      map.setView([+r.lat,+r.lon],16); follow=false; document.getElementById('locate').classList.remove('on');
+      toast('Titik ditambah ✓');
+    }).catch(function(){ toast('Gagal nyari alamat, cek koneksi.'); })
+    .finally(function(){ addBtn.disabled=false; addBtn.textContent='Tambah'; });
+  }
+  addBtn.addEventListener('click',addStop);
+  qInput.addEventListener('keydown',function(e){ if(e.key==='Enter') addStop(); });
+
+  // ---------- render list + markers ----------
+  function render(){
+    var list=document.getElementById('list'), empty=document.getElementById('empty');
+    document.querySelectorAll('.stop').forEach(function(n){n.remove()});
+    var active=stops.filter(function(s){return !s.done;});
+    document.getElementById('count').textContent=stops.length+' titik';
+
+    if(!stops.length){ empty.style.display='block'; }
+    else{
+      empty.style.display='none';
+      stops.forEach(function(s){
+        var displayNo = orderNo(s);
+        var el=document.createElement('div');
+        el.className='stop'+(s.done?' done':'');
+        el.innerHTML=
+          '<div class="num">'+displayNo+'</div>'+
+          '<div class="stop-txt"><div class="name"></div><div class="sub"></div></div>'+
+          '<div class="act">'+
+            '<button class="j-done"><svg class="chk" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></button>'+
+            '<button class="j-del"><svg class="del" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg></button>'+
+          '</div>';
+        el.querySelector('.name').textContent=s.name;
+        el.querySelector('.sub').textContent=s.sub;
+        el.querySelector('.j-done').addEventListener('click',function(){ s.done=!s.done; save(); render(); });
+        el.querySelector('.j-del').addEventListener('click',function(){ stops=stops.filter(function(x){return x.id!==s.id;}); save(); render(); });
+        el.querySelector('.stop-txt').addEventListener('click',function(){ map.setView([s.lat,s.lng],17); follow=false; document.getElementById('locate').classList.remove('on'); });
+        list.appendChild(el);
+      });
+    }
+    document.getElementById('route').disabled = active.length===0;
+    document.getElementById('sumStops').textContent=active.length;
+    drawMarkers();
+    positionFloaters();
+  }
+
+  function orderNo(s){
+    if(routeOrder){ var i=routeOrder.indexOf(s.id); if(i>=0) return i+1; }
+    return stops.filter(function(x){return !x.done;}).indexOf(s)+1 || '✓';
+  }
+
+  function drawMarkers(){
+    markers.forEach(function(m){map.removeLayer(m)}); markers=[];
+    stops.forEach(function(s){
+      var m=L.marker([s.lat,s.lng],{icon:L.divIcon({className:'',html:'<div class="marker-num'+(s.done?' done':'')+'">'+orderNo(s)+'</div>',iconSize:[26,26],iconAnchor:[13,13]})}).addTo(map);
+      m.bindPopup('<b>'+s.name+'</b><br><small>'+s.sub+'</small>');
+      markers.push(m);
+    });
+  }
+
+  // ---------- routing (OSRM, urut optimal) ----------
+  document.getElementById('route').addEventListener('click',function(){
+    var active=stops.filter(function(s){return !s.done;});
+    if(!active.length) return;
+    if(!me){ toast('Lokasi kamu belum ketemu — nyalain GPS dulu.'); return; }
+    var btn=this; btn.disabled=true; btn.innerHTML='<span class="spin"></span>Nyusun rute…';
+
+    var pts=[[me.lng,me.lat]].concat(active.map(function(s){return [s.lng,s.lat];}));
+    var coords=pts.map(function(p){return p[0]+','+p[1];}).join(';');
+    var url='https://router.project-osrm.org/trip/v1/driving/'+coords+'?source=first&roundtrip=false&overview=full&geometries=geojson';
+
+    fetch(url).then(function(r){return r.json();}).then(function(d){
+      if(d.code!=='Ok'||!d.trips||!d.trips.length) throw new Error('no route');
+      var trip=d.trips[0];
+      // urutan optimal: waypoints[i].waypoint_index (skip index 0 = posisi saya)
+      var order=active.map(function(s,i){ return {id:s.id, idx:d.waypoints[i+1].waypoint_index}; });
+      order.sort(function(a,b){return a.idx-b.idx;});
+      routeOrder=order.map(function(o){return o.id;});
+
+      if(routeLayer) map.removeLayer(routeLayer);
+      routeLayer=L.geoJSON(trip.geometry,{style:{color:'#0d9488',weight:6,opacity:.85,lineJoin:'round'}}).addTo(map);
+
+      var km=(trip.distance/1000).toFixed(1);
+      var min=Math.round(trip.duration/60);
+      var t = min>=60 ? Math.floor(min/60)+'j '+(min%60)+'m' : min+' mnt';
+      document.getElementById('sumDist').textContent=km+' km';
+      document.getElementById('sumTime').textContent=t;
+      document.getElementById('summary').style.display='flex';
+
+      render();
+      map.fitBounds(routeLayer.getBounds().pad(0.15));
+      toast('Rute siap! Ikutin nomor urut 1→'+active.length);
+    }).catch(function(){
+      toast('Gagal bikin rute. Cek koneksi / coba lagi.');
+    }).finally(function(){
+      btn.disabled=false; btn.textContent='Buat rute efisien';
+    });
+  });
+
+  // ---------- bottom sheet drag (collapse/expand) ----------
+  var sheet=document.getElementById('sheet'), grip=document.getElementById('grip');
+  var collapsed=false, COLLAPSE_PX=0;
+  function computeCollapse(){ COLLAPSE_PX = sheet.offsetHeight - 120; }
+  function setSheet(c){ collapsed=c; sheet.style.transform=c?('translateY('+COLLAPSE_PX+'px)'):'translateY(0)'; positionFloaters(); }
+  grip.addEventListener('click',function(){ computeCollapse(); setSheet(!collapsed); });
+
+  var startY=0,curY=0,drag=false;
+  grip.addEventListener('touchstart',function(e){ computeCollapse(); drag=true; startY=e.touches[0].clientY; sheet.style.transition='none'; },{passive:true});
+  grip.addEventListener('touchmove',function(e){
+    if(!drag) return; curY=e.touches[0].clientY; var dy=curY-startY;
+    var base=collapsed?COLLAPSE_PX:0, ty=Math.min(COLLAPSE_PX,Math.max(0,base+dy));
+    sheet.style.transform='translateY('+ty+'px)';
+  },{passive:true});
+  grip.addEventListener('touchend',function(){ if(!drag)return; drag=false; sheet.style.transition='';
+    var dy=curY-startY; if(Math.abs(dy)>40) setSheet(dy>0); else setSheet(collapsed); });
+
+  function positionFloaters(){
+    var h = collapsed ? 120 : sheet.offsetHeight;
+    document.getElementById('locate').style.bottom=(h+16)+'px';
+  }
+  window.addEventListener('resize',positionFloaters);
+
+  // ---------- go ----------
+  render(); startGPS(); positionFloaters();
+  setTimeout(positionFloaters,300);
+})();
+</script>
+</body>
+</html>
